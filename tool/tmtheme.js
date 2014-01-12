@@ -94,7 +94,6 @@ function extractStyles(theme) {
         "printMargin": "#e8e8e8",
         "background": parseColor(globalSettings.background),
         "foreground": parseColor(globalSettings.foreground),
-        "overwrite": parseColor(globalSettings.caret),
         "gutter": "#e8e8e8",
         "selection": parseColor(globalSettings.selection),
         "step": "rgb(198, 219, 174)",
@@ -158,9 +157,13 @@ function luma(color) {
 }
 
 function parseColor(color) {
+    if (color.length == 4)
+        color = color.replace(/[a-fA-F\d]/g, "$&$&");
     if (color.length == 7)
         return color;
     else {
+        if (!color.match(/^#(..)(..)(..)(..)$/))
+            console.error("can't parse color", color);
         var rgba = color.match(/^#(..)(..)(..)(..)$/).slice(1).map(function(c) {
             return parseInt(c, 16);
         });
@@ -247,8 +250,9 @@ var themes = {
     "pastel_on_dark": "Pastels on Dark",
     "solarized_dark": "Solarized-dark",
     "solarized_light": "Solarized-light",
+    "katzenmilch": "Katzenmilch",
+    "kuroir": "Kuroir Theme",
     //"textmate": "Textmate (Mac Classic)",
-    "terminal": "Terminal"
     "tomorrow": "Tomorrow",
     "tomorrow_night": "Tomorrow-Night",
     "tomorrow_night_blue": "Tomorrow-Night-Blue",
@@ -256,7 +260,7 @@ var themes = {
     "tomorrow_night_eighties": "Tomorrow-Night-Eighties",
     "twilight": "Twilight",
     "vibrant_ink": "Vibrant Ink",
-    //"xcode": "Xcode_default"
+    "xcode": "Xcode_default"
 };
 
 function convertTheme(name) {
@@ -276,13 +280,6 @@ function convertTheme(name) {
             css += "." + styles.cssClass + " " +
                 i.replace(/^|\./g, ".ace_") + "{" + styles[i] + "}";
         }
-
-        var js = fillTemplate(jsTemplate, {
-            name: name,
-            css: 'require("../requirejs/text!./' + name + '.css")', // quoteString(css), //
-            cssClass: "ace-" + hyphenate(name),
-            isDark: styles.isDark
-        });
 
         // we're going to look for NEW rules in the parsed content only
         // if such a rule exists, add it to the destination file
@@ -319,6 +316,13 @@ function convertTheme(name) {
             console.log("Creating new file: " +  name + ".css")
         }
         
+        var js = fillTemplate(jsTemplate, {
+            name: name,
+            css: 'require("../requirejs/text!./' + name + '.css")', // quoteString(css), //
+            cssClass: "ace-" + hyphenate(name),
+            isDark: styles.isDark
+        });
+
         fs.writeFileSync(__dirname + "/../lib/ace/theme/" + name + ".js", js);
         fs.writeFileSync(__dirname + "/../lib/ace/theme/" + name + ".css", css);
     })

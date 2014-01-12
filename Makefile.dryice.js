@@ -41,6 +41,9 @@ var ACE_HOME = __dirname;
 var BUILD_DIR = ACE_HOME + "/build";
 
 function main(args) {
+    if (args.indexOf("updateModes") !== -1) {
+        return updateModes();
+    }
     var type = "minimal";
     args = args.map(function(x) {
         if (x[0] == "-" && x[1] != "-")
@@ -71,17 +74,33 @@ function main(args) {
         } else if (type == "full") {
             demo(ace());
             bookmarklet();
+        } else if (type == "highlighter") {
+            var project = buildAce({
+                coreOnly: true,
+                exportModule: "ace/ext/static_highlight",
+                requires: ["ace/ext/static_highlight", "ace/theme/textmate"],
+                readFilters: [copy.filter.moduleDefines, function(a) {
+                    console.log(a.substring(0, 2500))
+                    return a
+                }]
+            })
+            copy({
+                source: project.result,
+                filter: getWriteFilters(project.options, "main"),
+                dest:   BUILD_DIR + "/static_highlight.js"
+            });
         }
     }
 
     console.log("--- Ace Dryice Build Tool ---");
     console.log("");
     console.log("Options:");
-    console.log("  minimal     Places necessary Ace files out in build dir; uses configuration flags below [default]");
-    console.log("  normal      Runs four Ace builds--minimal, minimal-noconflict, minimal-min, and minimal-noconflict-min");
-    console.log("  demo        Runs demo build of Ace");
-    console.log("  bm          Runs bookmarklet build of Ace");
-    console.log("  full        all of above");
+    console.log("  minimal      Places necessary Ace files out in build dir; uses configuration flags below [default]");
+    console.log("  normal       Runs four Ace builds--minimal, minimal-noconflict, minimal-min, and minimal-noconflict-min");
+    console.log("  demo         Runs demo build of Ace");
+    console.log("  bm           Runs bookmarklet build of Ace");
+    console.log("  full         all of above");
+    console.log("  highlighter  ");
     console.log("args:");
     console.log("  --target ./path   path to build folder");
     console.log("flags:");
@@ -155,7 +174,7 @@ function ace() {
         source: ACE_HOME + "/ChangeLog.txt",
         dest:   BUILD_DIR + "/ChangeLog.txt"
     });
-    
+
     return project;
 }
 
@@ -211,7 +230,7 @@ function demo(project) {
     });
 
     var demo = copy.createDataObject();
-    
+
     project.assumeAllFilesLoaded();
     copy({
         source: [{
@@ -242,10 +261,13 @@ function jsFileList(path, filter) {
 }
 
 function workers(path) {
-  return jsFileList(path).map(function(x) {
-    if (x.slice(-7) == "_worker")
-      return x.slice(0, -7);
-  }).filter(function(x) { return !!x; });
+    return jsFileList(path).map(function(x) {
+        if (x.slice(-7) == "_worker")
+            return x.slice(0, -7);
+    }).filter(function(x) { return !!x; });
+}
+function modeList() {
+    return jsFileList("lib/ace/mode", /_highlight_rules|_test|_worker|xml_util|_outdent|behaviour|completions/)
 }
 
 function addSuffix(options) {
@@ -274,7 +296,20 @@ function getWriteFilters(options, projectType) {
 
     if (options.compress)
         filters.push(copy.filter.uglifyjs);
-
+    
+    // copy.filter.uglifyjs.options.ascii = true; doesn't work with some uglify.js versions
+    filters.push(function(text) {
+         var t1 = text.replace(/[\x80-\uffff]/g, function(c) {
+            c = c.charCodeAt(0).toString(16);
+            if (c.length == 2)
+                return "\\x" + c;
+            if (c.length == 3)
+                c = "0" + c;
+            return "\\u" + c;
+        });
+        return text; 
+    });
+    
     if (options.exportModule && projectType == "main") {
         if (options.noconflict)
             filters.push(exportAce(options.ns, options.exportModule, options.ns));
@@ -299,18 +334,17 @@ var buildAce = function(options) {
         noconflict: false,
         suffix: null,
         name: "ace",
-        modes: jsFileList("lib/ace/mode", /_highlight_rules|_test|_worker|xml_util|_outdent|behaviour/),
+        modes: modeList(),
         themes: jsFileList("lib/ace/theme"),
         extensions: jsFileList("lib/ace/ext"),
         workers: workers("lib/ace/mode"),
-        keybindings: ["vim", "emacs"]
+        keybindings: ["vim", "emacs"],
+        readFilters: [copy.filter.moduleDefines]
     };
 
     for(var key in defaults)
         if (!options.hasOwnProperty(key))
             options[key] = defaults[key];
-    
-    generateThemesModule(options.themes);
 
     addSuffix(options);
 
@@ -321,6 +355,7 @@ var buildAce = function(options) {
     var name = options.name;
 
     var project = copy.createCommonJsProject(aceProject);
+    project.options = options;
     var ace = copy.createDataObject();
     copy({
         source: [ACE_HOME + "/build_support/mini_require.js"],
@@ -331,47 +366,18 @@ var buildAce = function(options) {
             project: project,
             require: options.requires
         }],
-        filter: [ copy.filter.moduleDefines ],
+        filter: options.readFilters,
         dest: ace
     });
-    
-    if (options.coreOnly)
-        return project;
 
+    if (options.coreOnly) {
+        project.result = ace;
+        return project;
+    }
     copy({
         source: ace,
         filter: getWriteFilters(options, "main"),
         dest:   targetDir + '/' + name + ".js"
-    });
-
-    console.log('# ace modes ---------');
-
-    project.assumeAllFilesLoaded();
-    options.modes.forEach(function(mode) {
-        console.log("mode " + mode);
-        copy({
-            source: [{
-                project: cloneProject(project),
-                require: [ 'ace/mode/' + mode ]
-            }],
-            filter: getWriteFilters(options, "mode"),
-            dest:   targetDir + "/mode-" + mode + ".js"
-        });
-    });
-
-    console.log('# ace themes ---------');
-
-    project.assumeAllFilesLoaded();
-    options.themes.forEach(function(theme) {
-        console.log("theme " + theme);
-        copy({
-            source: [{
-                project: cloneProject(project),
-                require: ["ace/theme/" + theme]
-            }],
-            filter: getWriteFilters(options, "theme"),
-            dest:   targetDir + "/theme-" + theme.replace("_theme", "") + ".js"
-        });
     });
 
     console.log('# ace extensions ---------');
@@ -388,6 +394,42 @@ var buildAce = function(options) {
             dest:   targetDir + "/ext-" + ext + ".js"
         });
     });
+
+    console.log('# ace modes ---------');
+
+    project.assumeAllFilesLoaded();
+    options.modes.forEach(function(mode) {
+        console.log("mode " + mode);
+        addSnippetFile(mode, project, targetDir, options);
+        copy({
+            source: [{
+                project: cloneProject(project),
+                require: [ 'ace/mode/' + mode ]
+            }],
+            filter: getWriteFilters(options, "mode"),
+            dest:   targetDir + "/mode-" + mode + ".js"
+        });
+    });
+
+    console.log('# ace themes ---------');
+
+    project.assumeAllFilesLoaded();
+    delete project.ignoredModules["ace/theme/textmate"];
+    delete project.ignoredModules["ace/requirejs/text!ace/theme/textmate.css"];
+    
+    options.themes.forEach(function(theme) {
+        console.log("theme " + theme);
+        copy({
+            source: [{
+                project: cloneProject(project),
+                require: ["ace/theme/" + theme]
+            }],
+            filter: getWriteFilters(options, "theme"),
+            dest:   targetDir + "/theme-" + theme.replace("_theme", "") + ".js"
+        });
+    });
+    
+    // generateThemesModule(options.themes);
 
     console.log('# ace key bindings ---------');
 
@@ -441,7 +483,7 @@ var buildAce = function(options) {
           dest: BUILD_DIR + '/ace-min.js'
         });
     }
-    
+
     return project;
 };
 
@@ -460,6 +502,30 @@ var buildAce = function(fn) {
     }
 }(buildAce);
 
+var addSnippetFile = function(modeName, project, targetDir, options) {
+    var snippetFilePath = ACE_HOME + "/lib/ace/snippets/" + modeName;
+    if (!fs.existsSync(snippetFilePath + ".js")) {
+        copy({
+            source: ACE_HOME + "/tool/snippets.tmpl.js",
+            dest:   snippetFilePath + ".js",
+            filter: [
+                function(t) {return t.replace(/%modeName%/g, modeName);}
+            ]
+        });
+    }
+    if (!fs.existsSync(snippetFilePath + ".snippets")) {
+        fs.writeFileSync(snippetFilePath + ".snippets", "")
+    }
+    copy({
+        source: [{
+            project: cloneProject(project),
+            require: [ 'ace/snippets/' + modeName ]
+        }],
+        filter: getWriteFilters(options, "mode"),
+        dest:   targetDir + "/snippets/" + modeName + ".js"
+    });
+}
+
 var textModules = {}
 var detectTextModules = function(input, source) {
     if (!source)
@@ -469,7 +535,7 @@ var detectTextModules = function(input, source) {
         input = input.toString();
 
     var module = source.isLocation ? source.path : source;
-    
+
     input = input.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     if (/\.css$/.test(module)) {
         // remove unnecessary whitespace from css
@@ -492,26 +558,29 @@ function generateThemesModule(themes) {
         '\n\nmodule.exports.themes = ' + JSON.stringify(themes, null, '    '),
         ';\n\n});'
     ].join('');
-    fs.writeFileSync('./lib/ace/ext/themelist_utils/themes.js', themelist, 'utf8');
+    fs.writeFileSync(__dirname + '/lib/ace/ext/themelist_utils/themes.js', themelist, 'utf8');
 }
 
 function inlineTextModules(text) {
-    var lastDep = "";
-    return text.replace(/, *['"]ace\/requirejs\/text!(.*?)['"]|= *require\(['"](?:ace|[.\/]+)\/requirejs\/text!(.*?)['"]\)/g, function(_, dep, call) {
+    var deps = [];
+    return text.replace(/, *['"]ace\/requirejs\/text!(.*?)['"]| require\(['"](?:ace|[.\/]+)\/requirejs\/text!(.*?)['"]\)/g, function(_, dep, call) {
         if (dep) {
-            if (!lastDep) {
-                lastDep = dep;
-                return "";
-            }
+            deps.push(dep);
+            return "";
         } else if (call) {
-            call = textModules[lastDep];
-            delete textModules[lastDep];
-            lastDep = "";
+            deps.some(function(d) {
+                if (d.split("/").pop() == call.split("/").pop()) {
+                    dep = d;
+                    return true;
+                }
+            });
+
+            call = textModules[dep];
+            // if (deps.length > 1)
+            //     console.log(call.length)
             if (call)
-                return "= " + call;
+                return " " + call;
         }
-        console.log(dep, lastDep, call);
-        throw "inlining of multiple text modules is not supported";
     });
 }
 
@@ -573,7 +642,9 @@ function namespace(ns) {
         text = text
             .toString()
             .replace('var ACE_NAMESPACE = "";', 'var ACE_NAMESPACE = "' + ns +'";')
-            .replace(/\bdefine\(/g, ns + ".define(");
+            .replace(/(\.define)|\bdefine\(/g, function(_, a) {
+                return a || ns + ".define("
+            });
 
         return text;
     };
@@ -604,6 +675,18 @@ function exportAce(ns, module, requireBase) {
             .slice(13, -1)
         );
     };
+}
+
+function updateModes() {
+    modeList().forEach(function(m) {
+        var filepath = __dirname + "/lib/ace/mode/" + m + ".js"
+        var source = fs.readFileSync(filepath, "utf8");
+        if (!/this.\$id\s*=\s*"/.test(source))
+            source = source.replace(/\n([ \t]*)(\}\).call\(\w*Mode.prototype\))/, '\n$1    this.$id = "";\n$1$2');
+        
+        source = source.replace(/(this.\$id\s*=\s*)"[^"]*"/,  '$1"ace/mode/' + m + '"');
+        fs.writeFileSync(filepath, source, "utf8")
+    })
 }
 
 if (!module.parent)
